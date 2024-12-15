@@ -11,20 +11,19 @@ from aiogram.types import Message
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-
-
+from pydantic.v1.typing import new_type_supertype
 
 
 class Form(StatesGroup):
     name = State()  
     age = State()
     city = State()
-    photos = State()
+    content = State()
 
 
 
 # Bot token can be obtained via https://t.me/BotFather
-TOKEN = ""
+TOKEN = "7660337058:AAHHugNM5JDLCMXtlkVpOzkEbtuycg1IUmU"
 
 # All handlers should be attached to the Router (or Dispatcher)
 
@@ -54,20 +53,30 @@ async def process_dsf(message: Message, state: FSMContext) -> None:
 @dp.message(Form.city)
 async def process_dsd(message: Message, state: FSMContext) -> None:
     await state.update_data(city=message.text)
-    await state.set_state(Form.photos)
-    await message.answer(f"Приятно познакомиться {message.text}.  Теперь скнь фоточки свои")
+    await state.set_state(Form.content)
+    await message.answer(f"Теперь скнь фоточки свои")
 
-@dp.message(StateFilter(Form.photos))
-async def process_photo(message: types.Message, state: FSMContext):
-    photo_id = message.photo[-1].file_id
-    
-    current_state = await state.get_state()
 
-    await message.answer(f"Текущее состояние: {current_state}", photo=photo_id)
-    await message.answer_photo(photo_id)
-    # Отправляем ID фотографии
-    await message.answer(f"Полученный ID фото: {photo_id}")
-    
+@dp.message(Form.content)
+async def process_photo(message: types.Message, state: FSMContext)-> None:
+    content_ids = {'video':[], 'photo':[]}
+    if message.photo:
+        content_ids['photo'].append(message.photo[-2].file_id)
+    elif message.video:
+            content_ids['video'].append(message.video.file_id)
+    else:
+        await state.set_state(Form.content)
+
+    for i in content_ids['photo']:
+        await message.answer_photo(i)
+    for i in content_ids['video']:
+        await message.answer_video(i)
+    await state.update_data(content=content_ids)
+    data = await state.get_data()  # Этот вызов синхронный, его можно делать без await
+    print(data)  # Выводим данные
+
+
+
 
 
 async def main() -> None:
