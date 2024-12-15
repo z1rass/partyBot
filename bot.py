@@ -1,18 +1,46 @@
 import asyncio
+import json
+
 import aiohttp
 import logging
 import sys
 from os import getenv
 
-from aiogram import Bot, Dispatcher, html, types
+import sqlalchemy
+from aiogram.utils.media_group import MediaGroupBuilder
+from sqlalchemy import create_engine, Column, Integer, String
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.types import PickleType
+
+from aiogram import Bot, Dispatcher, html, types, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardRemove
 
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+import keyboards
+from keyboards import contentKeyboard
 
+Base = sqlalchemy.orm.declarative_base()
+
+
+class User(Base):
+    __tablename__ = 'users'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String)
+    age = Column(Integer)
+    city = Column(String)
+    cityApi = Column(String)
+    content = Column(String)
+
+engine = create_engine('sqlite:///party.db', echo=True)
+Base.metadata.create_all(engine)
+Session = sessionmaker(bind=engine)
+session = Session()
 
 class Form(StatesGroup):
     name = State()
@@ -20,6 +48,7 @@ class Form(StatesGroup):
     city = State()
     cityApi = State()
     content = State()
+    contentCounter = State()
     isReady = State()
 
 
@@ -81,28 +110,78 @@ async def process_dsd(message: Message, state: FSMContext) -> None:
     apiCity = await get_city_info(message.text)
     await state.update_data(cityApi = apiCity)
     await state.update_data(city=message.text)
+    await state.update_data(contentCounter=0)
+    await state.update_data(content={'photo':[], 'video':[]})
     await state.set_state(Form.content)
-    await message.answer(f"Теперь скнь фоточки свои")
+    await message.answer(f"Теперь скнь фо   точки свои")
 
 
 @dp.message(Form.content)
 async def process_photo(message: types.Message, state: FSMContext)-> None:
-    content_ids = {'video':[], 'photo':[]}
+    data = await state.get_data()
+    counter = data['contentCounter']
+    content_ids = data['content']
+    print(content_ids)
+    if counter >= 3:
+        await state.set_state(Form.isReady)
+        await message.answer("Так выглядит твоя анкета:")
+        caption = f"{data['name']} - {data['age']} - {data['city']}"
+        media_group = MediaGroupBuilder(caption=caption)
+        for i in data["content"]['photo']:
+            media_group.add_photo(i)
+        for i in data["content"]['video']:
+            media_group.add_video(i)
+        bot = Bot(TOKEN)
+        await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+        await message.answer("Всё хорошо выглядит?")
+    elif counter > 0:
+        await message.answer(f"Получено {counter} из 3 медиафайлов, это всё?",
+                             reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
+
     if message.photo:
         content_ids['photo'].append(message.photo[-2].file_id)
+        counter += 1
+        await state.update_data(contentCounter=counter, content=content_ids)
     elif message.video:
             content_ids['video'].append(message.video.file_id)
+            counter += 1
+            await state.update_data(contentCounter=counter, content=content_ids)
     else:
-        await message.answer("Бро ты хуйню скинул, скинь норм фотки или видео")
+        if message.text.strip() == "Да":
+            await message.answer("Так выглядит твоя анкета:")
+            caption = f"{data['name']} - {data['age']} - {data['city']}"
+            media_group = MediaGroupBuilder(caption=caption)
+            for i in data["content"]['photo']:
+                media_group.add_photo(i)
+            for i in data["content"]['video']:
+                media_group.add_video(i)
+            bot = Bot(TOKEN)
+            await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+            await state.set_state(Form.isReady)
+            await message.answer("Всё хорошо выглядит?")
+        elif message.text.strip() == "Нет":
+            print(content_ids)
+            await message.answer("Тогда просто скинь мне 3 фото или видео для анкеты", reply_markup=ReplyKeyboardRemove())
 
-    for i in content_ids['photo']:
-        await message.answer_photo(i)
-    for i in content_ids['video']:
-        await message.answer_video(i)
-    await state.update_data(content=content_ids)
+
+        else:
+            await message.answer("Бро ты плохо скинул, скинь норм фотки или видео")
+
+
+
+@dp.message(Form.isReady)
+async def finalAsk(message: types.Message, state: FSMContext)-> None:
     data = await state.get_data()
-    await message.answer(str(data))
-
+    if message.text == "Да":
+        await message.answer("Ты прошёл регестрацию")
+        json_content = json.dumps(data['content'])
+        new_user = User(name=data['name'], age=data['age'], city=data['city'], cityApi=data['cityApi'],
+                        content=json_content)
+        session.add(new_user)
+        session.commit()
+        session.close()
+    else:
+        await message.answer("Затычка")
 
 async def main() -> None:
     # Initialize Bot instance with default bot properties which will be passed to all API calls
