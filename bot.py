@@ -1,5 +1,6 @@
 import asyncio
 import json
+from typing import Type
 
 import aiohttp
 import logging
@@ -31,11 +32,13 @@ class User(Base):
     __tablename__ = 'users'
 
     id = Column(Integer, primary_key=True)
+    telegram_id = Column(String)
     name = Column(String)
     age = Column(Integer)
     city = Column(String)
     cityApi = Column(String)
     content = Column(String)
+    chat_id = Column(String)
 
 engine = create_engine('sqlite:///party.db', echo=True)
 Base.metadata.create_all(engine)
@@ -48,8 +51,11 @@ class Form(StatesGroup):
     city = State()
     cityApi = State()
     content = State()
-    contentCounter = State()
+    isFinalShown = State()
     isReady = State()
+    isRegistered = State()
+    feed = State()
+
 
 
 async def get_city_info(city_name: str):
@@ -71,13 +77,14 @@ TOKEN = "7660337058:AAHHugNM5JDLCMXtlkVpOzkEbtuycg1IUmU"
 # All handlers should be attached to the Router (or Dispatcher)
 
 dp = Dispatcher()
+bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
 @dp.message(CommandStart())
 async def command_start_handler(message: Message, state: FSMContext) -> None:
     await state.set_state(Form.name)
     await message.answer(
-        f"Привет мой сладенький маленький друг, {html.bold(message.from_user.full_name)}!\nДавай скажи как тебя зовут"
+        f"Привет, {html.bold(message.from_user.full_name)}!\n Я помогу тебе найти где отпразнывать нг, или локальные тусовочки. Скажи как тебя зовут"
     )
 
 @dp.message(Form.name)
@@ -96,7 +103,7 @@ async def process_dsf(message: Message, state: FSMContext) -> None:
 
         await state.update_data(age=age)
 
-        await message.answer(f"Приятно познакомиться, {age}. Теперь напиши, пожалуйста, откуда ты?")
+        await message.answer(f"Ебать целых, {age} годиков! Теперь напиши, пожалуйста, откуда ты?")
 
         await state.set_state(Form.city)
 
@@ -106,86 +113,103 @@ async def process_dsf(message: Message, state: FSMContext) -> None:
 
 @dp.message(Form.city)
 async def process_dsd(message: Message, state: FSMContext) -> None:
+
     print(message.text)
     apiCity = await get_city_info(message.text)
     await state.update_data(cityApi = apiCity)
     await state.update_data(city=message.text)
-    await state.update_data(contentCounter=0)
     await state.update_data(content={'photo':[], 'video':[]})
+    await state.update_data(isFinalShown=False)
     await state.set_state(Form.content)
-    await message.answer(f"Теперь скнь фо   точки свои")
+    await message.answer(f"{apiCity} хороший городок. Ну теперь скинь свои фоточки")
 
 
-@dp.message(Form.content)
-async def process_photo(message: types.Message, state: FSMContext)-> None:
+
+async def finalqustion(message: types.Message, state: FSMContext)-> None:
     data = await state.get_data()
-    counter = data['contentCounter']
-    content_ids = data['content']
-    print(content_ids)
-    if counter >= 3:
+    if not data["isFinalShown"]:
+        await state.update_data(isFinalShown=True)
         await state.set_state(Form.isReady)
         await message.answer("Так выглядит твоя анкета:")
         caption = f"{data['name']} - {data['age']} - {data['city']}"
         media_group = MediaGroupBuilder(caption=caption)
         for i in data["content"]['photo']:
             media_group.add_photo(i)
-        for i in data["content"]['video']:
-            media_group.add_video(i)
-        bot = Bot(TOKEN)
+
         await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
-        await message.answer("Всё хорошо выглядит?")
-    elif counter > 0:
-        await message.answer(f"Получено {counter} из 3 медиафайлов, это всё?",
+        await message.answer("Всё хорошо выглядит?",
+                             reply_markup=keyboards.final_keyboard.as_markup(resize_keyboard=True))
+
+
+
+@dp.message(Form.content)
+async def process_photo(message: types.Message, state: FSMContext)-> None:
+    data = await state.get_data()
+    photos = data['content']['photo']
+    if len(photos) == 3 or message.text == "Да":
+        await finalqustion(message, state)
+        await state.update_data(content={'photo': photos})
+    if len(photos) < 4:
+        if message.photo:
+            photos.append(message.photo[-1].file_id)
+            print(photos)
+            await message.answer(f"Получено {len(photos)} из 3 фото, это всё?",
                              reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
-
-    if message.photo:
-        content_ids['photo'].append(message.photo[-2].file_id)
-        counter += 1
-        await state.update_data(contentCounter=counter, content=content_ids)
-    elif message.video:
-            content_ids['video'].append(message.video.file_id)
-            counter += 1
-            await state.update_data(contentCounter=counter, content=content_ids)
-    else:
-        if message.text.strip() == "Да":
-            await message.answer("Так выглядит твоя анкета:")
-            caption = f"{data['name']} - {data['age']} - {data['city']}"
-            media_group = MediaGroupBuilder(caption=caption)
-            for i in data["content"]['photo']:
-                media_group.add_photo(i)
-            for i in data["content"]['video']:
-                media_group.add_video(i)
-            bot = Bot(TOKEN)
-            await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
-            await state.set_state(Form.isReady)
-            await message.answer("Всё хорошо выглядит?")
-        elif message.text.strip() == "Нет":
-            print(content_ids)
-            await message.answer("Тогда просто скинь мне 3 фото или видео для анкеты", reply_markup=ReplyKeyboardRemove())
-
-
         else:
-            await message.answer("Бро ты плохо скинул, скинь норм фотки или видео")
+            await message.answer("Не понимаю бро")
+
+
+
+async def get_users(message, state, cityApi)-> list[Type[User]]:
+    users = session.query(User).filter(User.cityApi == cityApi).all()
+    #, age-2<age<age+2
+    return users
+
+
+@dp.message(Form.feed)
+async def process_feed(message: types.Message, state: FSMContext)-> None:
+    data = await state.get_data()
+    users = await get_users(message, state, data['cityApi'])
+    print(users)
+    for user in users:
+        caption = f"{user.name} - {user.age} - {user.city}"
+        media_group = MediaGroupBuilder(caption=caption)
+        for i in json.loads(user.content)['photo']:
+            media_group.add_photo(i)
+        await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+
+
+
+
+
+
+
+
 
 
 
 @dp.message(Form.isReady)
-async def finalAsk(message: types.Message, state: FSMContext)-> None:
+async def isright(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    if message.text == "Да":
-        await message.answer("Ты прошёл регестрацию")
+    if message.text == "Нравиться":
         json_content = json.dumps(data['content'])
         new_user = User(name=data['name'], age=data['age'], city=data['city'], cityApi=data['cityApi'],
                         content=json_content)
         session.add(new_user)
         session.commit()
-        session.close()
+        await state.set_state(Form.feed)
+        await state.update_data(isRegistered=True)
+        await message.answer("Сотреть анкеты?", reply_markup=keyboards.lookAnkets.as_markup(resize_keyboard=True))
     else:
-        await message.answer("Затычка")
+        await message.answer("Ну минус вайб", reply_markup=ReplyKeyboardRemove())
+
+
+
+
+
 
 async def main() -> None:
     # Initialize Bot instance with default bot properties which will be passed to all API calls
-    bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
     # And the run events dispatching
     await dp.start_polling(bot)
