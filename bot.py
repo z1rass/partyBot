@@ -5,16 +5,13 @@ from typing import Type
 import aiohttp
 import logging
 import sys
-from os import getenv
 
 import sqlalchemy
 from aiogram.utils.media_group import MediaGroupBuilder
 from sqlalchemy import create_engine, Column, Integer, String
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.types import PickleType
 
-from aiogram import Bot, Dispatcher, html, types, F
+from aiogram import Bot, Dispatcher, html, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
@@ -32,7 +29,7 @@ class User(Base):
     __tablename__ = 'users'
 
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(String)
+    telegram_id = Column(Integer, unique=True, nullable=False)
     name = Column(String)
     age = Column(Integer)
     city = Column(String)
@@ -55,6 +52,7 @@ class Form(StatesGroup):
     isReady = State()
     isRegistered = State()
     feed = State()
+    menu = State()
 
 
 
@@ -80,12 +78,20 @@ dp = Dispatcher()
 bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
 
+
 @dp.message(CommandStart())
 async def command_start_handler(message: Message, state: FSMContext) -> None:
-    await state.set_state(Form.name)
-    await message.answer(
-        f"Привет, {html.bold(message.from_user.full_name)}!\n Я помогу тебе найти где отпразнывать нг, или локальные тусовочки. Скажи как тебя зовут"
-    )
+    if session.query(User).filter(User.telegram_id == message.from_user.id).all():
+        user = session.query(User).filter(User.telegram_id == message.from_user.id).first()
+        await state.set_state(Form.feed)
+        await state.update_data(name=user.name, age=user.age, cityApi=user.cityApi, city=user.city, content=user.content)
+        await message.answer("Смотрим дальше?", reply_markup=keyboards.contentKeyboard.as_markup(resize_keyboard=True))
+    else:
+        await state.set_state(Form.name)
+        await message.answer(
+            f"Привет, {html.bold(message.from_user.full_name)}!\n Я помогу тебе найти где отпразнывать нг, или локальные тусовочки. Скажи как тебя зовут"
+        )
+
 
 @dp.message(Form.name)
 async def process_name(message: Message, state: FSMContext) -> None:
@@ -94,7 +100,7 @@ async def process_name(message: Message, state: FSMContext) -> None:
     await message.answer(f"Приятно познакомиться {message.text}.  Теперь напиши пожалуйста сколько тебе годиков: ")
 
 @dp.message(Form.age)
-async def process_dsf(message: Message, state: FSMContext) -> None:
+async def process_age(message: Message, state: FSMContext) -> None:
     try:
         age = int(message.text)
         if not (10 <= age <= 99):
@@ -112,16 +118,19 @@ async def process_dsf(message: Message, state: FSMContext) -> None:
 
 
 @dp.message(Form.city)
-async def process_dsd(message: Message, state: FSMContext) -> None:
+async def process_city(message: Message, state: FSMContext) -> None:
 
     print(message.text)
-    apiCity = await get_city_info(message.text)
-    await state.update_data(cityApi = apiCity)
+    api_city = await get_city_info(message.text)
+    await state.update_data(cityApi = api_city)
     await state.update_data(city=message.text)
     await state.update_data(content={'photo':[], 'video':[]})
     await state.update_data(isFinalShown=False)
     await state.set_state(Form.content)
-    await message.answer(f"{apiCity} хороший городок. Ну теперь скинь свои фоточки")
+    await message.answer(f"{api_city} хороший городок. Ну теперь скинь свои фоточки")
+
+
+
 
 
 
@@ -142,6 +151,9 @@ async def finalqustion(message: types.Message, state: FSMContext)-> None:
 
 
 
+
+
+
 @dp.message(Form.content)
 async def process_photo(message: types.Message, state: FSMContext)-> None:
     data = await state.get_data()
@@ -155,8 +167,28 @@ async def process_photo(message: types.Message, state: FSMContext)-> None:
             print(photos)
             await message.answer(f"Получено {len(photos)} из 3 фото, это всё?",
                              reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
-        else:
-            await message.answer("Не понимаю бро")
+
+
+
+
+
+@dp.message(Form.isReady)
+async def is_right(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if message.text == "Нравиться":
+        json_content = json.dumps(data['content'])
+        new_user = User(telegram_id = message.from_user.id,name=data['name'], age=data['age'], city=data['city'], cityApi=data['cityApi'],
+                        content=json_content, chat_id=message.chat.id)
+        session.add(new_user)
+        session.commit()
+        await state.set_state(Form.feed)
+        await state.update_data(isRegistered=True)
+        await message.answer("Сотреть анкеты?", reply_markup=keyboards.lookAnkets.as_markup(resize_keyboard=True))
+    else:
+        await message.answer("Ну минус вайб", reply_markup=ReplyKeyboardRemove())
+
+
+
 
 
 
@@ -177,34 +209,6 @@ async def process_feed(message: types.Message, state: FSMContext)-> None:
         for i in json.loads(user.content)['photo']:
             media_group.add_photo(i)
         await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
-
-
-
-
-
-
-
-
-
-
-
-@dp.message(Form.isReady)
-async def isright(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    if message.text == "Нравиться":
-        json_content = json.dumps(data['content'])
-        new_user = User(name=data['name'], age=data['age'], city=data['city'], cityApi=data['cityApi'],
-                        content=json_content)
-        session.add(new_user)
-        session.commit()
-        await state.set_state(Form.feed)
-        await state.update_data(isRegistered=True)
-        await message.answer("Сотреть анкеты?", reply_markup=keyboards.lookAnkets.as_markup(resize_keyboard=True))
-    else:
-        await message.answer("Ну минус вайб", reply_markup=ReplyKeyboardRemove())
-
-
-
 
 
 

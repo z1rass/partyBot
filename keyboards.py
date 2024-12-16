@@ -21,3 +21,6 @@ lookAnkets = ReplyKeyboardBuilder()
 lookAnkets.row(
         types.KeyboardButton(text="Смотреть")
     )
+lookAnkets.row(
+        types.KeyboardButton(text="Меню")
+    )
