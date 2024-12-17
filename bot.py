@@ -171,27 +171,41 @@ async def finalqustion(message: types.Message, state: FSMContext) -> None:
                              reply_markup=keyboards.final_keyboard.as_markup(resize_keyboard=True))
 
 
+
+
 @dp.message(Form.content)
 async def process_content(message: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
     photos = data['content']['photo']
     videos = data['content']['video']
-    if message.text:
-        await message.answer("Не понима. скинь пж фото или видео без текста")
-    else:
-        if (len(photos) + len(videos)) == 3 or message.text == "Да":
-            await finalqustion(message, state)
-            await state.update_data(content={'photo': photos, 'video': videos})
-        if (len(photos) + len(videos)) < 3:
-            if message.photo:
-                photos.append(message.photo[-1].file_id)
+
+    if not message.photo and not message.video:
+        await message.answer(f"Бро, не понимаю, скинь ещё {3 - (len(photos) + len(videos))} фото или видео")
+
+
+    if (len(photos) + len(videos)) < 3:
+        if message.photo:
+            photos.append(message.photo[-1].file_id)
+            if (len(photos) + len(videos)) == 3:
+                await finalqustion(message, state)
+                await state.update_data(content={'photo': photos, 'video': videos})
+            else:
                 print(photos)
                 await message.answer(f"Получено {len(photos) + len(videos)} из 3 фото, это всё?",
-                                     reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
-            elif message.video:
-                videos.append(message.video.file_id)
+                                 reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
+        elif message.video:
+            videos.append(message.video.file_id)
+            if (len(photos) + len(videos)) == 3:
+                await finalqustion(message, state)
+                await state.update_data(content={'photo': photos, 'video': videos})
+            else:
                 await message.answer(f"Получено {len(photos) + len(videos)} из 3 видео, это всё?",
-                                     reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
+                                 reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
+    elif (len(photos) + len(videos)) >= 2 or message.text == "Да":
+        await finalqustion(message, state)
+        await state.update_data(content={'photo': photos, 'video': videos})
+
+
 
 
 @dp.message(Form.isReady)
