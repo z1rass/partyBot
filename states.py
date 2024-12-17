@@ -11,6 +11,7 @@ class Form(StatesGroup):
     isFinalShown = State()
     isReady = State()
     isRegistered = State()
-    usersWasInFeed = State()
+    usersInFeed = State()
+    lastUser = State()
     feed = State()
     menu = State()

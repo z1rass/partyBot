@@ -94,8 +94,10 @@ async def command_start_handler(message: Message, state: FSMContext) -> None:
 @dp.message(Form.start)
 async def process_start(message: Message, state: FSMContext) -> None:
     if message.text == "Да":
+        data = await state.get_data()
         await state.set_state(Form.feed)
         await message.answer("🚀", reply_markup=keyboards.feed_keyboard.as_markup(resize_keyboard=True))
+        await get_users(message, state)
         await get_feed(message, state)
     elif message.text == "Нет":
         await state.set_state(Form.menu)
@@ -146,7 +148,6 @@ async def process_city(message: Message, state: FSMContext) -> None:
         await state.update_data(content={'photo': [], 'video': []})
         await state.update_data(isFinalShown=False)
         await state.update_data(isRegistered=False)
-        await state.update_data(usersWasInFeed=[])
         if session.query(User).filter(User.telegram_id == message.from_user.id).first():
             await state.update_data(isRegistered=True)
         await state.set_state(Form.content)
@@ -171,8 +172,6 @@ async def finalqustion(message: types.Message, state: FSMContext) -> None:
                              reply_markup=keyboards.final_keyboard.as_markup(resize_keyboard=True))
 
 
-
-
 @dp.message(Form.content)
 async def process_content(message: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
@@ -181,7 +180,6 @@ async def process_content(message: types.Message, state: FSMContext) -> None:
 
     if not message.photo and not message.video:
         await message.answer(f"Бро, не понимаю, скинь ещё {3 - (len(photos) + len(videos))} фото или видео")
-
 
     if (len(photos) + len(videos)) < 3:
         if message.photo:
@@ -192,7 +190,7 @@ async def process_content(message: types.Message, state: FSMContext) -> None:
             else:
                 print(photos)
                 await message.answer(f"Получено {len(photos) + len(videos)} из 3 фото, это всё?",
-                                 reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
+                                     reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
         elif message.video:
             videos.append(message.video.file_id)
             if (len(photos) + len(videos)) == 3:
@@ -200,12 +198,10 @@ async def process_content(message: types.Message, state: FSMContext) -> None:
                 await state.update_data(content={'photo': photos, 'video': videos})
             else:
                 await message.answer(f"Получено {len(photos) + len(videos)} из 3 видео, это всё?",
-                                 reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
+                                     reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
     elif (len(photos) + len(videos)) >= 2 or message.text == "Да":
         await finalqustion(message, state)
         await state.update_data(content={'photo': photos, 'video': videos})
-
-
 
 
 @dp.message(Form.isReady)
@@ -249,40 +245,62 @@ async def is_right(message: Message, state: FSMContext) -> None:
         await message.answer("Ну минус вайб. Регайся заеново, как тебя зовут?", reply_markup=ReplyKeyboardRemove())
 
 
-async def get_users(message, state, cityApi) -> list[Type[User]]:
-    users = session.query(User).filter(User.cityApi == cityApi).all()
-    # , age-2<age<age+2
-    return users
-
+async def get_users(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    users = session.query(User).filter(User.cityApi == data["cityApi"]).all()
+    await state.update_data(usersInFeed=[users])
 
 async def get_feed(message, state):
     data = await state.get_data()
-    users = await get_users(message, state, data['cityApi'])
-    print(users)
-    user = random.choice(users)
-    caption = f"{user.name} - {user.age} - {user.city}"
-    media_group = MediaGroupBuilder(caption=caption)
-    for i in json.loads(user.content)['photo']:
-        media_group.add_photo(i)
-    for i in json.loads(user.content)['video']:
-        media_group.add_video(i)
-    await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+    users = data["usersInFeed"]
+    print(not users[0])
+    if users[0]:
+        user = users[0].pop(random.randint(0, len(users[0]) - 1))
+        await state.update_data(usersInFeed=users, lastUser = user)
+        caption = f"{user.name} - {user.age} - {user.city}"
+        media_group = MediaGroupBuilder(caption=caption)
+        for i in json.loads(user.content)['photo']:
+            media_group.add_photo(i)
+        for i in json.loads(user.content)['video']:
+            media_group.add_video(i)
+        await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+    else:
+        await get_users(message, state)
+        data = await state.get_data()
+        users = data["usersInFeed"]
+        user = users[0].pop(random.randint(0, len(users[0]) - 1))
+        await state.update_data(usersInFeed=users, lastUser = user)
+        caption = f"{user.name} - {user.age} - {user.city}"
+        media_group = MediaGroupBuilder(caption=caption)
+        for i in json.loads(user.content)['photo']:
+            media_group.add_photo(i)
+        for i in json.loads(user.content)['video']:
+            media_group.add_video(i)
+        await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
+
 
 
 @dp.message(Form.feed)
 async def process_feed(message: types.Message, state: FSMContext) -> None:
+    data = await state.get_data()
     if message.text == "Нет" or message.text == "⚙️":
         await state.set_state(Form.menu)
         await message.answer(menu_text, reply_markup=keyboards.menu_keyboard.as_markup(resize_keyboard=True))
+    elif message.text == "👍":
+        await bot.send_message(data['lastUser'].chat_id, "Ты кое кому понравилься!!!")
     else:
         await get_feed(message, state)
+
+
 
 
 @dp.message(Form.menu)
 async def menu(message: types.Message, state: FSMContext):
     match message.text:
         case "1🚀":
+            data = await state.get_data()
             await state.set_state(Form.feed)
+            await get_users(message, state)
             await message.answer("🚀", reply_markup=keyboards.feed_keyboard.as_markup(resize_keyboard=True))
             await get_feed(message, state)
         case "2":
