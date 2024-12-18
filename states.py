@@ -14,4 +14,10 @@ class Form(StatesGroup):
     usersInFeed = State()
     lastUser = State()
     feed = State()
+    likes = State()
+    who_liked_message = State()
     menu = State()
+
+class MyStates(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_age = State()

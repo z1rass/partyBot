@@ -7,7 +7,9 @@ import aiohttp
 import logging
 import sys
 
+
 import sqlalchemy
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.media_group import MediaGroupBuilder
 from sqlalchemy import create_engine, Column, Integer, String
 from sqlalchemy.orm import sessionmaker
@@ -22,8 +24,8 @@ from aiogram.fsm.context import FSMContext
 import keyboards
 from keyboards import contentKeyboard
 
-from states import Form
-import menu
+from states import Form, MyStates
+
 
 Base = sqlalchemy.orm.declarative_base()
 
@@ -40,11 +42,22 @@ class User(Base):
     content = Column(String)
     chat_id = Column(String)
 
+class UserLikes(Base):
+    __tablename__ = 'likes'
+    id = Column(Integer, primary_key=True)
+    liker_id = Column(Integer)
+    liked_id = Column(Integer)
+    is_obaudno = Column(Integer)
+
+
+
 
 engine = create_engine('sqlite:///party.db', echo=True)
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 session = Session()
+
+
 
 
 async def get_city_info(city_name: str):
@@ -59,18 +72,41 @@ async def get_city_info(city_name: str):
                 return None
 
 
+
+
+async def check_for_likes(message: types.Message, state: FSMContext):
+    while True:
+        data = await state.get_data()
+        likes = session.query(UserLikes).filter(
+            UserLikes.liked_id == message.from_user.id,
+            UserLikes.is_obaudno == 0
+        ).all()
+        print(data)
+        if likes and data["who_liked_message"] != True:
+            await bot.send_message(message.chat.id, f"Ты понравился {len(likes)} людям. Смотрим кому?", reply_markup=keyboards.contentKeyboard.as_markup(resize_keyboard=True))
+            await state.set_state(Form.likes)
+            await state.update_data(likes=likes, who_liked_message=True)
+        else:
+            await state.update_data(likes=likes)
+        await asyncio.sleep(180)
+
 # Bot token can be obtained via https://t.me/BotFather
 TOKEN = "7660337058:AAHHugNM5JDLCMXtlkVpOzkEbtuycg1IUmU"
 
 # All handlers should be attached to the Router (or Dispatcher)
 
+
+
 dp = Dispatcher()
 bot = Bot(TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+storage = MemoryStorage()
 
 menu_text = """1. Смотреть анкеты
 2. Изменить анкету
 3. Донатик
 4. Получить дикпик"""
+
+
 
 
 @dp.message(CommandStart())
@@ -175,33 +211,30 @@ async def finalqustion(message: types.Message, state: FSMContext) -> None:
 @dp.message(Form.content)
 async def process_content(message: types.Message, state: FSMContext) -> None:
     data = await state.get_data()
-    photos = data['content']['photo']
-    videos = data['content']['video']
-
-    if not message.photo and not message.video:
-        await message.answer(f"Бро, не понимаю, скинь ещё {3 - (len(photos) + len(videos))} фото или видео")
-
-    if (len(photos) + len(videos)) < 3:
+    photos = data['content'].get('photo', [])
+    videos = data['content'].get('video', [])
+    print(photos)
+    media = message.photo or message.video
+    if not media and message.text != "Да":
+        remaining = 3 - (len(photos) + len(videos))
+        await message.answer(f"Бро, не понимаю, скинь ещё {remaining} фото или видео")
+    elif len(photos) + len(videos) < 3 and message.text != "Да":
         if message.photo:
             photos.append(message.photo[-1].file_id)
-            if (len(photos) + len(videos)) == 3:
-                await finalqustion(message, state)
-                await state.update_data(content={'photo': photos, 'video': videos})
-            else:
-                print(photos)
-                await message.answer(f"Получено {len(photos) + len(videos)} из 3 фото, это всё?",
-                                     reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
         elif message.video:
             videos.append(message.video.file_id)
-            if (len(photos) + len(videos)) == 3:
-                await finalqustion(message, state)
-                await state.update_data(content={'photo': photos, 'video': videos})
-            else:
-                await message.answer(f"Получено {len(photos) + len(videos)} из 3 видео, это всё?",
-                                     reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
-    elif (len(photos) + len(videos)) >= 2 or message.text == "Да":
-        await finalqustion(message, state)
+
         await state.update_data(content={'photo': photos, 'video': videos})
+
+        if len(photos) + len(videos) == 3:
+            await finalqustion(message, state)
+        else:
+            await message.answer(
+                f"Получено {len(photos) + len(videos)} из 3, это всё?",
+                reply_markup=contentKeyboard.as_markup(resize_keyboard=True)
+            )
+    else:
+        await finalqustion(message, state)
 
 
 @dp.message(Form.isReady)
@@ -240,9 +273,11 @@ async def is_right(message: Message, state: FSMContext) -> None:
             await state.update_data(isRegistered=True)
             await message.answer("Сотреть анкеты?",
                                  reply_markup=keyboards.contentKeyboard.as_markup(resize_keyboard=True))
-    else:
+    elif message.text == "Не нравиться":
         await state.set_state(Form.name)
         await message.answer("Ну минус вайб. Регайся заеново, как тебя зовут?", reply_markup=ReplyKeyboardRemove())
+    else:
+        await message.answer("Не понимаю, у тебя 2 кнопки снизу!!!")
 
 
 async def get_users(message: Message, state: FSMContext) -> None:
@@ -282,15 +317,24 @@ async def get_feed(message, state):
 
 @dp.message(Form.feed)
 async def process_feed(message: types.Message, state: FSMContext) -> None:
+    asyncio.create_task(check_for_likes(message, state))
     data = await state.get_data()
     if message.text == "Нет" or message.text == "⚙️":
         await state.set_state(Form.menu)
         await message.answer(menu_text, reply_markup=keyboards.menu_keyboard.as_markup(resize_keyboard=True))
     elif message.text == "👍":
-        await bot.send_message(data['lastUser'].chat_id, "Ты кое кому понравилься!!!")
+        # await bot.send_message(data['lastUser'].chat_id, "Ты кое кому понравилься!!!")
+        like = UserLikes(liker_id=message.from_user.id, liked_id=data['lastUser'].telegram_id, is_obaudno=0)
+        session.add(like)
+        session.commit()
+        await state.set_state(Form.feed)
     else:
         await get_feed(message, state)
 
+
+@dp.message(Form.likes)
+async def show_likes(message: types.Message, state: FSMContext) -> None:
+    pass
 
 
 
@@ -324,7 +368,8 @@ async def allAnother(message: types.Message, state: FSMContext) -> None:
         user = session.query(User).filter(User.telegram_id == message.from_user.id).first()
         # await state.set_state(Form.feed)
         await state.update_data(name=user.name, age=user.age, cityApi=user.cityApi, city=user.city,
-                                content=user.content)
+                                content=user.content, who_liked_message=False)
+        print(await state.get_data())
 
         await message.answer("Смотрим дальше?", reply_markup=keyboards.contentKeyboard.as_markup(resize_keyboard=True))
         await state.set_state(Form.start)
