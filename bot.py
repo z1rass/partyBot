@@ -74,7 +74,7 @@ async def get_city_info(city_name: str):
 
 
 
-
+#TODO Пофиксить логику. щяс работает как хуйня, нужно чтобы проверяло как-то хз.
 async def check_for_likes(message: types.Message, state: FSMContext):
     while True:
         data = await state.get_data()
