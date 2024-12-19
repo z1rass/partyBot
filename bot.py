@@ -7,7 +7,6 @@ import aiohttp
 import logging
 import sys
 
-
 import sqlalchemy
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.utils.media_group import MediaGroupBuilder
@@ -26,7 +25,6 @@ from keyboards import contentKeyboard
 
 from states import Form
 
-
 Base = sqlalchemy.orm.declarative_base()
 
 
@@ -43,6 +41,7 @@ class User(Base):
     content = Column(String)
     chat_id = Column(String)
 
+
 class UserLikes(Base):
     __tablename__ = 'likes'
     id = Column(Integer, primary_key=True)
@@ -51,14 +50,10 @@ class UserLikes(Base):
     is_obaudno = Column(Integer)
 
 
-
-
 engine = create_engine('sqlite:///party.db')
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 session = Session()
-
-
 
 
 async def get_city_info(city_name: str):
@@ -73,26 +68,25 @@ async def get_city_info(city_name: str):
                 return None
 
 
+async def check_for_likes(message: types.Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    likes = session.query(UserLikes).filter(
+        UserLikes.liked_id == message.from_user.id,
+        UserLikes.is_obaudno == 0
+    ).all()
+    print(likes)
+    if "likes" not in data or (data["likes"] != likes):
+        await bot.send_message(message.chat.id, f"Ты понравился {len(likes)} людям. Смотрим кому?",
+                               reply_markup=keyboards.contentKeyboard.as_markup(resize_keyboard=True))
+        await state.update_data(who_liked_message=True, likes=likes)
+        await state.set_state(Form.askWantSeeLikes)
+    await asyncio.sleep(10)
 
-#TODO Пофиксить логику. щяс работает как хуйня, нужно чтобы проверяло как-то хз.
-async def check_for_likes(message: types.Message, state: FSMContext):
-    while True:
-        data = await state.get_data()
-        likes = session.query(UserLikes).filter(
-            UserLikes.liked_id == message.from_user.id,
-            UserLikes.is_obaudno == 0
-        ).all()
-        print(likes)
-        if "likes" in data or (data["likes"] != likes):
-            await bot.send_message(message.chat.id, f"Ты понравился {len(likes)} людям. Смотрим кому?", reply_markup=keyboards.contentKeyboard.as_markup(resize_keyboard=True))
-            await state.update_data(who_liked_message=True, likes=likes)
-            await state.set_state(Form.askWantSeeLikes)
-        await asyncio.sleep(10)
+
 # Bot token can be obtained via https://t.me/BotFather
 TOKEN = "7660337058:AAGEmsA7aVC3C17XbiD07Qr7YjDgUdvDzn8"
 
 # All handlers should be attached to the Router (or Dispatcher)
-
 
 
 dp = Dispatcher()
@@ -103,8 +97,6 @@ menu_text = """1. Смотреть анкеты
 2. Изменить анкету
 3. Донатик
 4. Получить дикпик"""
-
-
 
 
 @dp.message(CommandStart())
@@ -127,7 +119,6 @@ async def command_start_handler(message: Message, state: FSMContext) -> None:
 
 @dp.message(Form.start)
 async def process_start(message: Message, state: FSMContext) -> None:
-    asyncio.create_task(check_for_likes(message, state))
     if message.text == "Да":
         data = await state.get_data()
         await state.set_state(Form.feed)
@@ -285,13 +276,15 @@ async def get_users(message: Message, state: FSMContext) -> None:
     users = session.query(User).filter(User.cityApi == data["cityApi"], User.telegram_id != message.from_user.id).all()
     await state.update_data(usersInFeed=[users])
 
+
 async def get_feed(message, state):
+    asyncio.create_task(check_for_likes(message, state))
     data = await state.get_data()
     users = data["usersInFeed"]
     print(not users[0])
     if users[0]:
         user = users[0].pop(random.randint(0, len(users[0]) - 1))
-        await state.update_data(usersInFeed=users, lastUser = user)
+        await state.update_data(usersInFeed=users, lastUser=user)
         caption = f"{user.name} - {user.age} - {user.city}"
         media_group = MediaGroupBuilder(caption=caption)
         for i in json.loads(user.content)['photo']:
@@ -304,7 +297,7 @@ async def get_feed(message, state):
         data = await state.get_data()
         users = data["usersInFeed"]
         user = users[0].pop(random.randint(0, len(users[0]) - 1))
-        await state.update_data(usersInFeed=users, lastUser = user)
+        await state.update_data(usersInFeed=users, lastUser=user)
         caption = f"{user.name} - {user.age} - {user.city}"
         media_group = MediaGroupBuilder(caption=caption)
         for i in json.loads(user.content)['photo']:
@@ -312,7 +305,6 @@ async def get_feed(message, state):
         for i in json.loads(user.content)['video']:
             media_group.add_video(i)
         await bot.send_media_group(chat_id=message.chat.id, media=media_group.build())
-
 
 
 @dp.message(Form.feed)
@@ -350,6 +342,9 @@ async def show_likes(message: types.Message, state: FSMContext) -> None:
     print(likes)
     if message.text == "👍":
         like = data['like']
+        like_from_db = session.query(UserLikes).filter(UserLikes.liker_id == like.liker_id, UserLikes.liked_id == message.from_user.id).first()
+        like_from_db.is_obaudno = 2
+        session.commit()
         user = session.query(User).filter(User.telegram_id == like.liker_id).first()
         anketa = MediaGroupBuilder(caption=f"{user.name} - {user.age} - {user.city} - @{user.telegram_username}")
         сontent = json.loads(user.content)
@@ -359,7 +354,11 @@ async def show_likes(message: types.Message, state: FSMContext) -> None:
         for i in сontent["video"]:
             anketa.add_video(i)
         await bot.send_media_group(message.chat.id, anketa.build())
-
+    elif message.text == "👎":
+        like = data['like']
+        like_from_db = session.query(UserLikes).filter(UserLikes.liker_id == like.liker_id, UserLikes.liked_id == message.from_user.id).first()
+        like_from_db.is_obaudno = 1
+        session.commit()
     if not likes:
         await state.set_state(Form.start)
         await state.update_data(likes=[], like=None)
@@ -376,6 +375,7 @@ async def show_likes(message: types.Message, state: FSMContext) -> None:
         for i in сontent["video"]:
             anketa.add_video(i)
         await bot.send_media_group(message.chat.id, anketa.build())
+
 
 @dp.message(Form.menu)
 async def menu(message: types.Message, state: FSMContext):
