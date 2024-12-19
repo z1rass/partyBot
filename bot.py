@@ -24,7 +24,7 @@ from aiogram.fsm.context import FSMContext
 import keyboards
 from keyboards import contentKeyboard
 
-from states import Form, MyStates
+from states import Form
 
 
 Base = sqlalchemy.orm.declarative_base()
@@ -35,6 +35,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True)
     telegram_id = Column(Integer, unique=True, nullable=False)
+    telegram_username = Column(String)
     name = Column(String)
     age = Column(Integer)
     city = Column(String)
@@ -52,7 +53,7 @@ class UserLikes(Base):
 
 
 
-engine = create_engine('sqlite:///party.db', echo=True)
+engine = create_engine('sqlite:///party.db')
 Base.metadata.create_all(engine)
 Session = sessionmaker(bind=engine)
 session = Session()
@@ -81,17 +82,14 @@ async def check_for_likes(message: types.Message, state: FSMContext):
             UserLikes.liked_id == message.from_user.id,
             UserLikes.is_obaudno == 0
         ).all()
-        print(data)
-        if likes and data["who_liked_message"] != True:
+        print(likes)
+        if "likes" in data or (data["likes"] != likes):
             await bot.send_message(message.chat.id, f"Ты понравился {len(likes)} людям. Смотрим кому?", reply_markup=keyboards.contentKeyboard.as_markup(resize_keyboard=True))
-            await state.set_state(Form.likes)
-            await state.update_data(likes=likes, who_liked_message=True)
-        else:
-            await state.update_data(likes=likes)
-        await asyncio.sleep(180)
-
+            await state.update_data(who_liked_message=True, likes=likes)
+            await state.set_state(Form.askWantSeeLikes)
+        await asyncio.sleep(10)
 # Bot token can be obtained via https://t.me/BotFather
-TOKEN = "7660337058:AAHHugNM5JDLCMXtlkVpOzkEbtuycg1IUmU"
+TOKEN = "7660337058:AAGEmsA7aVC3C17XbiD07Qr7YjDgUdvDzn8"
 
 # All handlers should be attached to the Router (or Dispatcher)
 
@@ -129,6 +127,7 @@ async def command_start_handler(message: Message, state: FSMContext) -> None:
 
 @dp.message(Form.start)
 async def process_start(message: Message, state: FSMContext) -> None:
+    asyncio.create_task(check_for_likes(message, state))
     if message.text == "Да":
         data = await state.get_data()
         await state.set_state(Form.feed)
@@ -248,6 +247,7 @@ async def is_right(message: Message, state: FSMContext) -> None:
             user = session.query(User).filter_by(telegram_id=message.from_user.id).first()
 
             if user:
+                user.telegram_username = message.from_user.username
                 user.name = data['name']
                 user.age = data['age']
                 user.city = data['city']
@@ -282,7 +282,7 @@ async def is_right(message: Message, state: FSMContext) -> None:
 
 async def get_users(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    users = session.query(User).filter(User.cityApi == data["cityApi"]).all()
+    users = session.query(User).filter(User.cityApi == data["cityApi"], User.telegram_id != message.from_user.id).all()
     await state.update_data(usersInFeed=[users])
 
 async def get_feed(message, state):
@@ -317,7 +317,6 @@ async def get_feed(message, state):
 
 @dp.message(Form.feed)
 async def process_feed(message: types.Message, state: FSMContext) -> None:
-    asyncio.create_task(check_for_likes(message, state))
     data = await state.get_data()
     if message.text == "Нет" or message.text == "⚙️":
         await state.set_state(Form.menu)
@@ -328,15 +327,55 @@ async def process_feed(message: types.Message, state: FSMContext) -> None:
         session.add(like)
         session.commit()
         await state.set_state(Form.feed)
-    else:
         await get_feed(message, state)
+    elif message.text == "👎":
+        await get_feed(message, state)
+    else:
+        await state.set_state(Form.start)
+        await message.answer("Такого варианта нету. Смотреть дальше?", reply_markup=contentKeyboard.as_markup())
+
+
+@dp.message(Form.askWantSeeLikes)
+async def ask_show_likes(message: types.Message, state: FSMContext) -> None:
+    if message.text == "Да":
+        await state.set_state(Form.likes)
+        await message.answer("💌", reply_markup=keyboards.feed_keyboard.as_markup(resize_keyboard=True))
+        await show_likes(message, state)
 
 
 @dp.message(Form.likes)
 async def show_likes(message: types.Message, state: FSMContext) -> None:
-    pass
+    data = await state.get_data()
+    likes = data['likes']
+    print(likes)
+    if message.text == "👍":
+        like = data['like']
+        user = session.query(User).filter(User.telegram_id == like.liker_id).first()
+        anketa = MediaGroupBuilder(caption=f"{user.name} - {user.age} - {user.city} - @{user.telegram_username}")
+        сontent = json.loads(user.content)
+        print(user.content)
+        for i in сontent["photo"]:
+            anketa.add_photo(i)
+        for i in сontent["video"]:
+            anketa.add_video(i)
+        await bot.send_media_group(message.chat.id, anketa.build())
 
-
+    if not likes:
+        await state.set_state(Form.start)
+        await state.update_data(likes=[], like=None)
+        await message.answer("Это всё. Смотрим дальше?", reply_markup=contentKeyboard.as_markup(resize_keyboard=True))
+    else:
+        like = likes.pop(random.randint(0, len(likes) - 1))
+        await state.update_data(like=like)
+        user = session.query(User).filter(User.telegram_id == like.liker_id).first()
+        anketa = MediaGroupBuilder(caption=f"{user.name} - {user.age} - {user.city}")
+        сontent = json.loads(user.content)
+        print(user.content)
+        for i in сontent["photo"]:
+            anketa.add_photo(i)
+        for i in сontent["video"]:
+            anketa.add_video(i)
+        await bot.send_media_group(message.chat.id, anketa.build())
 
 @dp.message(Form.menu)
 async def menu(message: types.Message, state: FSMContext):

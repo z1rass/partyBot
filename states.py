@@ -12,12 +12,12 @@ class Form(StatesGroup):
     isReady = State()
     isRegistered = State()
     usersInFeed = State()
+    askWantSeeLikes = State()
     lastUser = State()
     feed = State()
     likes = State()
+    last_like = State()
     who_liked_message = State()
     menu = State()
 
-class MyStates(StatesGroup):
-    waiting_for_name = State()
-    waiting_for_age = State()
+
